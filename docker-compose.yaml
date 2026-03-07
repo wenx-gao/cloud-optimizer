@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  # Backend Agent Service
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+
+  # Frontend Dashboard Service
+  # Falls dein Frontend im Unterordner 'src/frontend' liegt:
+  web:
+    build: ./src/frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+    volumes:
+      - ./src/frontend:/app
+      - /app/node_modules

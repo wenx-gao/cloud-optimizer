@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,           /* Fixes the Express import error */
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,              /* Speeds up compilation and avoids library type errors */
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*"]
+}
