@@ -1,76 +1,7 @@
 
-// import express from "express"; 
-// import { createServer } from "http";
-// import { Server } from "socket.io";
-// import { graph, AgentState } from "./agent/graph";
-// import { HumanMessage } from "@langchain/core/messages";
-
-
-// //dotenv.config();
-// const app = express();
-// const httpServer = createServer(app);
-// const io = new Server(httpServer, { cors: { origin: "*" } });
-
-// const latencies: number[] = [];
-// let totalOverallCost = 0;
-
-// const getP95 = (arr: number[]) => {
-//   if (arr.length === 0) return 0;
-//   const sorted = [...arr].sort((a, b) => a - b);
-//   const pos = Math.floor(sorted.length * 0.95);
-//   return sorted[pos];
-// };
-
-// io.on("connection", (socket) => {
-//   console.log("Client connected:", socket.id);
-
-//   socket.on("run_optimization", async (input: string) => {
-//     const startTime = Date.now();
-    
-//     try {
-//       // Nutze new HumanMessage(input) statt { role: "user", ... }
-//       const result = (await graph.invoke({ 
-//         messages: [new HumanMessage(input)], 
-//         costTracking: 0, 
-//         isSafe: true 
-//       })) as unknown as AgentState;
-      
-//       const duration = Date.now() - startTime;
-//       latencies.push(duration);
-      
-//       const currentCost = result.costTracking || 0;
-//       totalOverallCost += currentCost;
-
-//       const lastMessage = result.messages.length > 0 
-//         ? result.messages[result.messages.length - 1].content 
-//         : "No response";
-
-//       socket.emit("update", {
-//         result: lastMessage,
-//         metrics: {
-//           p95: getP95(latencies),
-//           cost: currentCost,
-//           totalCost: totalOverallCost
-//         }
-//       });
-//     } catch (err: any) {
-//       console.error("Agent Error:", err);
-//       socket.emit("error", err.message);
-//     }
-//   });
-// });
-
-// app.get("/", (req, res) => {
-//   res.send("Cloud-Cost-Optimizer API is running. Connect via Socket.io on port 3000.");
-// });
-// httpServer.listen(3000, () => console.log("Server running on http://localhost:3000"));
-
-
-// src/server.ts
-
 import "dotenv/config";
 import dns from "node:dns";
-dns.setDefaultResultOrder("ipv4first"); // Zwingt Node, IPv4 zu nutzen
+dns.setDefaultResultOrder("ipv4first"); 
 
 import express from "express";
 import { createServer } from "http";
@@ -87,16 +18,20 @@ let totalOverallCost = 0;
 io.on("connection", (socket) => {
   console.log("🟢 Client verbunden:", socket.id);
 
-  socket.on("run_optimization", async (input: string) => {
-    console.log("📩 Frage erhalten:", input);
+  socket.on("run_optimization", async (data) => {
+    const userInput = typeof data === 'string' ? data : data.input;
+    const userProvider = data.provider || "google"; 
+
     const startTime = Date.now();
-    
+        
     try {
       console.log("🧠 Agent startet Workflow...");
       const result = (await graph.invoke({ 
-        messages: [new HumanMessage(input)], 
+        messages: [new HumanMessage(userInput)], 
         costTracking: 0, 
-        isSafe: true 
+        isSafe: true,
+        scrapedData: "",
+        provider: userProvider
       })) as unknown as AgentState;
       
       console.log("✅ Agent fertig. Nachrichten im State:", result.messages.length);
@@ -105,20 +40,38 @@ io.on("connection", (socket) => {
       const currentCost = result.costTracking || 0;
       totalOverallCost += currentCost;
 
-      const lastMessage = result.messages.length > 0 
-        ? result.messages[result.messages.length - 1].content 
-        : "Keine Antwort vom Agenten.";
+    // Wir extrahieren die KI-Antwort sicher
+    let mainResponse = "Analyse abgeschlossen.";
 
-      console.log("📤 Sende Antwort an Frontend:", lastMessage);
+    // Wir gehen das Nachrichten-Array von hinten nach vorne durch
+    for (let i = result.messages.length - 1; i >= 0; i--) {
+      const m = result.messages[i];
+      
+      // 1. Prüfen, ob es eine KI-Nachricht ist (Typ "ai")
+      if (m._getType() === "ai") {
+        // 2. Den Content sicher in einen String umwandeln
+        const contentStr = typeof m.content === 'string' 
+          ? m.content 
+          : JSON.stringify(m.content);
 
-      socket.emit("update", {
-        result: lastMessage,
-        metrics: {
-          p95: duration, // Vereinfacht für Test
-          cost: currentCost,
-          totalCost: totalOverallCost
+        // 3. Wir ignorieren die technische Nachricht der Action-Node
+        if (!contentStr.includes("Optimierung") && !contentStr.includes("SYSTEM:")) {
+          mainResponse = contentStr;
+          break; // Wir haben die eigentliche Analyse gefunden!
         }
-      });
+      }
+    }
+
+    console.log("📤 Sende KI-Antwort an Frontend:", mainResponse);
+
+    socket.emit("update", {
+      result: mainResponse,
+      metrics: {
+        p95: duration,
+        cost: result.costTracking,
+        totalCost: totalOverallCost
+      }
+    });
     } catch (err: any) {
       console.error("❌ AGENT FEHLER:", err);
       socket.emit("error", err.message);

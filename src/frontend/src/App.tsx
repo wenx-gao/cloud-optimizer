@@ -26,11 +26,21 @@ export default function App() {
     };
   }, []);
 
+
+  const [provider, setProvider] = useState<"google" | "local">("google");
+
+  // Beim Absenden der Frage:
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input) return;
+    if (!input.trim()) return; // Verhindert leere Nachrichten
+
     setLogs(prev => [...prev, `You: ${input}`]);
-    socket.emit("run_optimization", input);
+
+    socket.emit("run_optimization", { 
+      input: input, 
+      provider: provider 
+    });
+
     setInput("");
   };
 
@@ -46,6 +56,15 @@ export default function App() {
       </header>
 
       <main style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '0.8rem', color: provider === 'local' ? '#4ade80' : '#64748b' }}>Local (Ollama)</span>
+          <input 
+            type="checkbox" 
+            checked={provider === 'google'} 
+            onChange={() => setProvider(p => p === 'google' ? 'local' : 'google')} 
+          />
+          <span style={{ fontSize: '0.8rem', color: provider === 'google' ? '#60a5fa' : '#64748b' }}>Google Gemini</span>
+        </div>
         <div style={{ backgroundColor: '#1e293b', borderRadius: '0.5rem', padding: '1.5rem', border: '1px solid #334155' }}>
           <h2 style={{ fontSize: '0.875rem', color: '#94a3b8', marginBottom: '1rem', textTransform: 'uppercase' }}>Agent Console</h2>
           <div style={{ height: '300px', overflowY: 'auto', backgroundColor: '#0f172a', padding: '1rem', borderRadius: '0.25rem', fontFamily: 'monospace', fontSize: '0.875rem', marginBottom: '1rem' }}>
