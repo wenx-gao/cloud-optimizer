@@ -4,30 +4,46 @@ import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { ChatOllama } from "@langchain/ollama";
 import { BaseMessage, HumanMessage, AIMessage } from "@langchain/core/messages"; 
+import Parser from "rss-parser";
 
 
-const NEWS_SOURCES = {
-  zeit: {
-    url: "https://www.zeit.de/index",
-    selector: "article h2, article h3",
-    name: "ZEIT Online"
+const rssParser = new Parser();
+
+const TECH_SOURCES = {
+  techcrunch: {
+    // Stabile TechCrunch AI URL
+    url: "https://techcrunch.com/category/artificial-intelligence/feed/",
+    name: "TechCrunch AI"
   },
-  spiegel: {
-    url: "https://www.spiegel.de",
-    selector: "article h2",
-    name: "DER SPIEGEL"
-  },
-  faz: {
-    url: "https://www.faz.net/aktuell",
-    selector: ".tsr-Base_HeadlineText, article h2",
-    name: "FAZ.NET"
-  },
-  welt: {
-    url: "https://www.welt.de",
-    selector: "article h2",
-    name: "WELT"
+  verge: {
+    // Die stabilste URL für The Verge (Main Feed)
+    url: "https://www.theverge.com/rss/index.xml",
+    name: "The Verge AI"
   }
 };
+
+// const NEWS_SOURCES = {
+//   zeit: {
+//     url: "https://www.zeit.de/index",
+//     selector: "article h2, article h3",
+//     name: "ZEIT Online"
+//   },
+//   spiegel: {
+//     url: "https://www.spiegel.de",
+//     selector: "article h2",
+//     name: "DER SPIEGEL"
+//   },
+//   faz: {
+//     url: "https://www.faz.net/aktuell",
+//     selector: ".tsr-Base_HeadlineText, article h2",
+//     name: "FAZ.NET"
+//   },
+//   welt: {
+//     url: "https://www.welt.de",
+//     selector: "article h2",
+//     name: "WELT"
+//   }
+// };
 
 
 // Beide Modelle vorbereiten
@@ -55,104 +71,99 @@ export type AgentState = typeof AgentStateAnnotation.State;
 
 
 function routeInput(state: AgentState) {
-  const userQuery = state.messages[state.messages.length - 1].content.toLowerCase();
-  const newsKeywords = ["news", "schlagzeilen", "nachrichten", "zeit", "spiegel", "faz", "welt"];
+  // Wir holen die letzte Nachricht des Users
+  const lastMessage = state.messages[state.messages.length - 1];
+  const userQuery = typeof lastMessage.content === 'string' 
+    ? lastMessage.content.toLowerCase() 
+    : JSON.stringify(lastMessage.content).toLowerCase();
+
+  // ERWEITERTE KEYWORD-LISTE
+  const newsKeywords = [
+    "news", "schlagzeilen", "nachrichten", "update", "bericht", "neues", 
+    "zeit", "spiegel", "faz", "welt", "verge", "techcrunch", "rss"
+  ];
   
-  // Wenn ein News-Keyword gefunden wird -> Scraper-Pfad
-  if (newsKeywords.some(keyword => userQuery.includes(keyword))) {
-    console.log("🛤️ Route gewählt: NEWS-SERVICE");
+  // Prüfen, ob IRGENDEINES der Keywords im Text vorkommt
+  const isNewsRequest = newsKeywords.some(keyword => userQuery.includes(keyword));
+
+  console.log("  [UserQuery] ", userQuery);
+
+  if (isNewsRequest) {
+    console.log("🛤️ Route gewählt: NEWS-SERVICE (Tech-Update)");
     return "news_route";
   }
   
-  // Ansonsten -> Normaler Chat-Pfad
   console.log("🛤️ Route gewählt: SIMPLE-CHAT");
   return "chat_route";
 }
 
-async function scrapeNewsNode(state: AgentState) {
-  const userQuery = state.messages[0].content.toLowerCase();
-  
-  // 1. Quelle identifizieren (Standard ist ZEIT)
-  let sourceKey: keyof typeof NEWS_SOURCES = "zeit";
-  if (userQuery.includes("spiegel")) sourceKey = "spiegel";
-  if (userQuery.includes("faz")) sourceKey = "faz";
-  if (userQuery.includes("welt")) sourceKey = "welt";
 
-  const source = NEWS_SOURCES[sourceKey];
-  console.log(`🌐 Scrape ${source.name}...`);
+async function scrapeNewsNode(state: AgentState) {
+  const userQuery = state.messages[state.messages.length - 1].content.toLowerCase();
+  
+  let sourceKey: keyof typeof TECH_SOURCES = "techcrunch";
+  if (userQuery.includes("verge")) sourceKey = "verge";
+
+  const source = TECH_SOURCES[sourceKey];
+  console.log(`📡 Rufe RSS-Feed ab: ${source.name}...`);
 
   try {
-    const { data } = await axios.get(source.url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...' }
+    const feed = await rssParser.parseURL(source.url);
+    
+    const articles = feed.items.slice(0, 5).map(item => {
+      return `TITLE: ${item.title}\nSUMMARY: ${item.contentSnippet || item.content}\n---`;
     });
 
-    const $ = cheerio.load(data);
-    let headlines: string[] = [];
-
-    $(source.selector).each((i, el) => {
-      const text = $(el).text().trim();
-      if (text.length > 25 && headlines.length < 8) {
-        headlines.push(text);
-      }
-    });
-
-    // Wir speichern auch den Namen der Quelle im State für die Action-Node
     return { 
-      scrapedData: headlines.join(" | "),
-      sourceName: source.name
+      scrapedData: articles.join("\n"),
+      sourceName: source.name // Erfolg: Name wird gesetzt
     };
-  } catch (error) {
-    return { scrapedData: "FEHLER" };
+  } catch (error: any) {
+    console.error(`❌ RSS Fehler bei ${source.name}:`, error.message);
+    return { 
+      scrapedData: `FEHLER_BEIM_RSS_FEED: ${error.message}`,
+      sourceName: source.name // WICHTIG: Name auch im Fehlerfall mitschicken!
+    };
   }
 }
+
 
 async function reasoningNode(state: AgentState) {
   const model = state.provider === "local" ? localModel : googleModel;
   
-  // 3. Wir prüfen, ob Daten da sind, und passen den Prompt an
-  let prompt = "";
-  if (state.scrapedData === "KEINE_NEWS_GEFUNDEN" || state.scrapedData === "FEHLER_BEIM_LESEN") {
-    prompt = "Entschuldige dich höflich beim User, dass du gerade keine News von zeit.de lesen konntest (wahrscheinlich technisches Problem).";
-  } else {
-    prompt = `
-      Du bist ein erfahrener Nachrichten-Redakteur. 
-      Hier sind die aktuellen Top-Themen von einem News Portal:
-      ${state.scrapedData}
-
-      Erstelle daraus ein kurzes, professionelles Briefing für Discord.
-      Regeln:
-      1. Max. 3 Sätze insgesamt.
-      2. Nutze einen sachlichen, informativen Ton.
-      3. Ignoriere alles, was nicht nach einer echten Nachricht klingt.
-      4. Antworte nur mit der Zusammenfassung, ohne Einleitungssätze.
-      `;
-
+  // Falls ein Fehler im Scraper aufgetreten ist
+  if (state.scrapedData.startsWith("FEHLER")) {
+    return { 
+      messages: [new AIMessage(`Leider gab es ein Problem beim Abrufen der News von ${state.sourceName}.`)] 
+    };
   }
+
+  const prompt = `
+    Du bist ein Senior AI Specialist. Hier sind die neuesten Schlagzeilen von ${state.sourceName}:
+    ${state.scrapedData}
+    ... (Rest des Prompts wie gehabt)
+  `;
   
-  console.log(`🧠 KI (${state.provider}) generiert Zusammenfassung...`);
   const response = await model.invoke([new HumanMessage(prompt)]);
   return { messages: [response] };
 }
 
 // NODE 3: Discord Action
 async function actionNode(state: AgentState) {
-  const summary = state.messages[state.messages.length - 1].content;
-  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-  const sourceName = state.sourceName || "News-Update";
-
-  const discordMessage = {
-    embeds: [{
-      title: `🗞️ ${sourceName} News-Update`,
-      description: summary,
-      color: sourceName.includes("SPIEGEL") ? 16711680 : 3447003, // Rot für Spiegel, Blau für den Rest
-      footer: { text: `KI-Modell: ${state.provider} | Stand: ${new Date().toLocaleTimeString()}` },
-      timestamp: new Date().toISOString()
-    }]
-  };
-
-  await axios.post(webhookUrl!, discordMessage);
-  return { messages: [new AIMessage("✅ Discord-Update gesendet.")] };
+  // Nur wenn es wirklich News-Daten gibt, nutzen wir den Webhook
+  if (state.scrapedData && state.scrapedData.length > 0) {
+    const summary = state.messages[state.messages.length - 1].content;
+    const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+    
+    // Optional: Hier könntest du prüfen, ob die Anfrage von Discord kam,
+    // um Dopplungen zu vermeiden.
+    if (webhookUrl && !state.messages[0].content.includes("!agent")) {
+        await axios.post(webhookUrl, { content: summary });
+    }
+  }
+  return { messages: [new AIMessage("Aktion abgeschlossen.")] };
 }
+
 
 async function chatNode(state: AgentState) {
   const model = state.provider === "local" ? localModel : googleModel;
@@ -204,17 +215,17 @@ const workflow = new StateGraph(AgentStateAnnotation)
   .addNode("guardrail", guardrailNode)
   .addNode("action", actionNode)
   .addConditionalEdges(START, routeInput, {
-    "news_route": "scrape",            // Gehe zum Scraper
-    "chat_route": "chat"               // Gehe zum normalen Chat
+    "news_route": "scrape",            // goto Scraper
+    "chat_route": "chat"               // goto normalen Chat
   })
 
-  // Pfad für News
+  // Path for News
   .addEdge("scrape", "reason")
   .addEdge("reason", "guardrail")
   .addConditionalEdges("guardrail", (s) => s.isSafe ? "action" : END)
   .addEdge("action", END)
 
-  // Pfad für normalen Chat (endet sofort nach der Antwort)
+  // Path for normal Chat (ends after the answer)
   .addEdge("chat", END);
 
 export const graph = workflow.compile();

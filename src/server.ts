@@ -1,4 +1,6 @@
 
+import { Client, GatewayIntentBits } from 'discord.js';
+//import { HumanMessage } from "@langchain/core/messages";
 import "dotenv/config";
 import dns from "node:dns";
 dns.setDefaultResultOrder("ipv4first"); 
@@ -8,6 +10,57 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import { graph, AgentState } from "./agent/graph";
 import { HumanMessage } from "@langchain/core/messages";
+
+
+const discordClient = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
+
+discordClient.once('clientReady', (c) => {
+  console.log(`🤖 Discord Bot ist online! Angemeldet als ${c.user.tag}`);
+});
+
+
+// Wenn jemand eine Nachricht im Discord schreibt
+discordClient.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+
+  if (message.content.startsWith('!agent')) {
+    const userInput = message.content.replace('!agent', '').trim();
+    
+    try {
+      // Hier stand vorher "google", ändere es auf "local"
+      const result = await graph.invoke({
+        messages: [new HumanMessage(userInput)],
+        provider: "local", // <--- Hier auf "local" setzen für Llama3
+        sourceName: "Discord-Anfrage",
+        isSafe: true,
+        costTracking: 0,
+        scrapedData: ""
+      }) as any;
+
+      // Die KI-Antwort extrahieren (Logik wie beim Frontend)
+      const aiResponse = result.messages.find((m: any) => m._getType() === "ai")?.content 
+                        || "Ich konnte keine Antwort generieren.";
+
+      message.reply(`### 🤖 KI-Antwort (Lokal)\n${aiResponse}\n\n*Generiert via Ollama & LangGraph*`);
+
+    } catch (error) {
+      console.error("Discord Agent Fehler:", error);
+      message.reply("❌ Fehler beim Aufruf des lokalen Modells.");
+    }
+  }
+});
+
+// Test-Log hinzufügen
+console.log("🔍 Prüfe Discord Token:", process.env.DISCORD_TOKEN ? "Gefunden (Länge: " + process.env.DISCORD_TOKEN.length + ")" : "NICHT GEFUNDEN!");
+
+// Login-Teil
+discordClient.login(process.env.DISCORD_TOKEN);
 
 const app = express();
 const httpServer = createServer(app);
